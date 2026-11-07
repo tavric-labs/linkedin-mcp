@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-07
+
 ### Fixed
 
 - Posting failed with `linkedin returned HTTP 426` because the default
@@ -34,6 +36,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   release.
 - Dependabot updates for Go modules, Docker and GitHub Actions.
 
-[Unreleased]: https://github.com/tavric-labs/linkedin-mcp/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/tavric-labs/linkedin-mcp/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/tavric-labs/linkedin-mcp/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/tavric-labs/linkedin-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/tavric-labs/linkedin-mcp/releases/tag/v0.1.0
