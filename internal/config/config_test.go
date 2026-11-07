@@ -62,6 +62,9 @@ func TestLoadAppliesDefaultsAndDerivesTheEndpoints(t *testing.T) {
 	if config.PrivateKey == nil {
 		t.Fatal("the client key was not loaded")
 	}
+	if config.APIVersion != "202610" {
+		t.Fatalf("default API version = %q", config.APIVersion)
+	}
 }
 
 func TestLoadRejectsMissingOrInvalidSettings(t *testing.T) {

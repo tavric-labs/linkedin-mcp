@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Posting failed with `linkedin returned HTTP 426` because the default
+  `LINKEDIN_API_VERSION` (`202510`) is past LinkedIn's sunset. The default is
+  now `202610`. A 426 now tells the caller to set `LINKEDIN_API_VERSION`, and
+  the server log records LinkedIn's status, `code`, `serviceErrorCode` and
+  `message` (truncated; never request bodies, tokens or post text).
+
 ## [0.1.1] - 2026-11-07
 
 ### Added

@@ -145,6 +145,9 @@ func (s *Server) linkedInFailure(tool, subject string, err error) *mcp.CallToolR
 	if errors.Is(err, linkedin.ErrUnauthorized) {
 		return result("Your LinkedIn session has expired. Sign in again from your MCP client.", true)
 	}
+	if errors.Is(err, linkedin.ErrVersionInactive) {
+		return result("LinkedIn API version is no longer active; the operator must set LINKEDIN_API_VERSION to a current version.", true)
+	}
 	return result("LinkedIn could not complete the request.", true)
 }
 
