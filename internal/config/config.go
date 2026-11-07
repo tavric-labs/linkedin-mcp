@@ -20,6 +20,9 @@ type Config struct {
 	// Issuer is the mcp-auth issuer URL. JWKSURL is discovered from it unless set.
 	Issuer, JWKSURL string
 	TokenEndpoint   string
+	// TokenDialAddr optionally makes the token exchange connect to this host:port
+	// instead of the issuer host, for clusters where the public issuer is not reachable.
+	TokenDialAddr   string
 	ClientID, KeyID string
 	PrivateKey      *rsa.PrivateKey
 	APIBase         string
@@ -42,6 +45,7 @@ func Load(getenv func(string) string) (Config, error) {
 		Resource:      value("LINKEDIN_MCP_RESOURCE", ""),
 		Issuer:        strings.TrimRight(value("LINKEDIN_MCP_ISSUER", ""), "/"),
 		JWKSURL:       value("LINKEDIN_JWKS_URL", ""),
+		TokenDialAddr: value("LINKEDIN_MCP_TOKEN_DIAL_ADDR", ""),
 		ClientID:      value("LINKEDIN_MCP_CLIENT_ID", ""),
 		KeyID:         value("LINKEDIN_MCP_CLIENT_KEY_ID", ""),
 		APIBase:       strings.TrimRight(value("LINKEDIN_API_BASE", "https://api.linkedin.com"), "/"),

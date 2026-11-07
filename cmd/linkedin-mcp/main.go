@@ -53,7 +53,7 @@ func run() error {
 	}
 	tokens, err := exchange.New(exchange.Config{
 		TokenEndpoint: cfg.TokenEndpoint, Resource: cfg.Resource, ClientID: cfg.ClientID,
-		KeyID: cfg.KeyID, PrivateKey: cfg.PrivateKey, AllowInsecure: cfg.AllowInsecure,
+		KeyID: cfg.KeyID, PrivateKey: cfg.PrivateKey, AllowInsecure: cfg.AllowInsecure, DialAddr: cfg.TokenDialAddr,
 	})
 	if err != nil {
 		return err

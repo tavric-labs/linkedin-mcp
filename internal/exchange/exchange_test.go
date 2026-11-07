@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -97,5 +98,40 @@ func TestNewRequiresEveryField(t *testing.T) {
 		if _, err := New(config); err == nil {
 			t.Errorf("accepted a config without %s", name)
 		}
+	}
+}
+
+func TestAnInternalDialAddressKeepsThePublicAudienceAndHost(t *testing.T) {
+	var host string
+	var assertion string
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host = r.Host
+		_ = r.ParseForm()
+		assertion = r.PostForm.Get("client_assertion")
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "t", "token_type": "Bearer", "expires_in": 3600})
+	}))
+	defer endpoint.Close()
+
+	const public = "http://auth.public.invalid:18080/mcp-auth/token"
+	source, err := New(Config{
+		TokenEndpoint: public, DialAddr: endpoint.Listener.Addr().String(), Resource: "https://mcp.example/linkedin/mcp",
+		ClientID: "c", KeyID: "k", PrivateKey: testKey(t), AllowInsecure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.MemberToken(context.Background(), "bearer"); err != nil {
+		t.Fatalf("the exchange did not reach the internal address: %v", err)
+	}
+	if host != "auth.public.invalid:18080" {
+		t.Fatalf("Host = %q, want the public host so mcp-auth sees the issuer it expects", host)
+	}
+	parts := strings.Split(assertion, ".")
+	if len(parts) != 3 {
+		t.Fatalf("assertion = %q", assertion)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || !strings.Contains(string(payload), `"aud":"`+public+`"`) {
+		t.Fatalf("assertion audience must be the public token URL, payload = %s (%v)", payload, err)
 	}
 }

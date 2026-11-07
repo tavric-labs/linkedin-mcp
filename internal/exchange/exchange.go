@@ -9,6 +9,9 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"time"
 
 	mcpauth "github.com/Agent-Hellboy/mcp-auth/auth-client/go/mcpauth"
 )
@@ -25,6 +28,11 @@ type Config struct {
 	PrivateKey *rsa.PrivateKey
 	// AllowInsecure permits an http token endpoint, for local development only.
 	AllowInsecure bool
+	// DialAddr, when set, is the host:port to connect to instead of the token
+	// endpoint's own host. The request keeps the endpoint's URL, Host header and
+	// assertion audience, which mcp-auth checks against its issuer. Use it when
+	// the public issuer is not reachable from the pod, as on a local cluster.
+	DialAddr string
 }
 
 // Source exchanges tokens. It holds no cache: every call is authorised afresh,
@@ -48,14 +56,30 @@ func New(config Config) (*Source, error) {
 	case config.PrivateKey == nil:
 		return nil, errors.New("client private key is required")
 	}
-	return &Source{
-		config: config,
-		client: &mcpauth.TokenExchangeClient{
-			Endpoint:      config.TokenEndpoint,
-			AllowInsecure: config.AllowInsecure,
-			ClientAuth:    &mcpauth.PrivateKeyJWTClientAuth{ClientID: config.ClientID, PrivateKey: config.PrivateKey, KeyID: config.KeyID},
+	exchange := &mcpauth.TokenExchangeClient{
+		Endpoint:      config.TokenEndpoint,
+		AllowInsecure: config.AllowInsecure,
+		ClientAuth:    &mcpauth.PrivateKeyJWTClientAuth{ClientID: config.ClientID, PrivateKey: config.PrivateKey, KeyID: config.KeyID},
+	}
+	if config.DialAddr != "" {
+		exchange.HTTPClient = dialingClient(config.DialAddr)
+	}
+	return &Source{config: config, client: exchange}, nil
+}
+
+// dialingClient connects every request to addr, whatever host the URL names. It
+// refuses redirects, as the SDK's own client does.
+func dialingClient(addr string) *http.Client {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return dialer.DialContext(ctx, network, addr)
+			},
 		},
-	}, nil
+		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("token endpoint must not redirect") },
+	}
 }
 
 // MemberToken returns the LinkedIn access token for the person who holds
