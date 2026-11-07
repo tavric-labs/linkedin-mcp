@@ -52,7 +52,7 @@ func Load(getenv func(string) string) (Config, error) {
 		ClientID:      value("LINKEDIN_MCP_CLIENT_ID", ""),
 		KeyID:         value("LINKEDIN_MCP_CLIENT_KEY_ID", ""),
 		APIBase:       strings.TrimRight(value("LINKEDIN_API_BASE", "https://api.linkedin.com"), "/"),
-		APIVersion:    value("LINKEDIN_API_VERSION", "202510"),
+		APIVersion:    value("LINKEDIN_API_VERSION", "202610"),
 		AllowInsecure: value("LINKEDIN_MCP_ALLOW_INSECURE", "") == "true",
 	}
 	for name, v := range map[string]string{

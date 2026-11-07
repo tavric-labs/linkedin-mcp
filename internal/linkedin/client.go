@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,6 +21,41 @@ import (
 // (self-serve tokens last about 60 days and cannot be refreshed) or was
 // revoked. The member has to sign in again.
 var ErrUnauthorized = errors.New("linkedin rejected the member's token")
+
+// ErrVersionInactive means LinkedIn answered HTTP 426: the Linkedin-Version
+// header names a version that is no longer active (versions sunset about a
+// year after release). The operator must set LINKEDIN_API_VERSION.
+var ErrVersionInactive = errors.New("linkedin api version is no longer active")
+
+// maxDetail caps each LinkedIn error field copied into an error.
+const maxDetail = 200
+
+// APIError is a non-2xx answer from a versioned LinkedIn call. Its text is for
+// server logs: the status plus LinkedIn's own error code, service error code
+// and message, each truncated. It never holds a request body or token.
+type APIError struct {
+	Status           int
+	Code             string
+	ServiceErrorCode string
+	Message          string
+	Err              error // optional sentinel, such as ErrVersionInactive
+}
+
+func (e *APIError) Error() string {
+	text := fmt.Sprintf("linkedin returned HTTP %d", e.Status)
+	if e.Code != "" {
+		text += " code=" + e.Code
+	}
+	if e.ServiceErrorCode != "" {
+		text += " serviceErrorCode=" + e.ServiceErrorCode
+	}
+	if e.Message != "" {
+		text += " message=" + e.Message
+	}
+	return text
+}
+
+func (e *APIError) Unwrap() error { return e.Err }
 
 // Visibility is who may see a post.
 type Visibility string
@@ -117,8 +153,8 @@ func (c *Client) CreatePost(ctx context.Context, token, memberID, text string, v
 		return "", fmt.Errorf("linkedin create post: %w", err)
 	}
 	defer response.Body.Close()
-	if err := statusError(response); err != nil {
-		return "", err
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", apiError(response)
 	}
 	return response.Header.Get("X-Restli-Id"), nil
 }
@@ -134,4 +170,46 @@ func statusError(response *http.Response) error {
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<16))
 	return fmt.Errorf("linkedin returned HTTP %d", response.StatusCode)
+}
+
+// apiError reads LinkedIn's JSON error fields from a failed versioned call.
+// A body that is not JSON contributes nothing.
+func apiError(response *http.Response) error {
+	if response.StatusCode == http.StatusUnauthorized {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<16))
+		return ErrUnauthorized
+	}
+	apiErr := &APIError{Status: response.StatusCode}
+	if response.StatusCode == http.StatusUpgradeRequired {
+		apiErr.Err = ErrVersionInactive
+	}
+	var body struct {
+		Code             any    `json:"code"`
+		ServiceErrorCode any    `json:"serviceErrorCode"`
+		Message          string `json:"message"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<16)).Decode(&body); err == nil {
+		apiErr.Code = detail(body.Code)
+		apiErr.ServiceErrorCode = detail(body.ServiceErrorCode)
+		apiErr.Message = detail(body.Message)
+	}
+	return apiErr
+}
+
+// detail renders a scalar JSON value on one line, truncated to maxDetail.
+func detail(value any) string {
+	var text string
+	switch v := value.(type) {
+	case string:
+		text = v
+	case float64:
+		text = strconv.FormatFloat(v, 'f', -1, 64)
+	default:
+		return ""
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) > maxDetail {
+		text = text[:maxDetail]
+	}
+	return text
 }

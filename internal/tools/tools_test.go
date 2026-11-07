@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -29,6 +31,7 @@ type fakeLinkedIn struct {
 	profileToken string
 	profileErr   error
 	postCalls    int
+	postErr      error
 	post         struct {
 		token, member, text string
 		visibility          linkedin.Visibility
@@ -46,6 +49,9 @@ func (f *fakeLinkedIn) Profile(_ context.Context, token string) (linkedin.Profil
 func (f *fakeLinkedIn) CreatePost(_ context.Context, token, member, text string, visibility linkedin.Visibility) (string, error) {
 	f.postCalls++
 	f.post.token, f.post.member, f.post.text, f.post.visibility = token, member, text, visibility
+	if f.postErr != nil {
+		return "", f.postErr
+	}
 	return "urn:li:share:7001", nil
 }
 
@@ -179,5 +185,41 @@ func TestPublishingNeedsTheWriteScope(t *testing.T) {
 	// A dry run changes nothing, so a read-only token may preview.
 	if preview, _, err := server.CreatePost(context.Background(), requestWithScopes("mcp-bearer", "tools:read"), PostArgs{Text: "hi"}); err != nil || preview.IsError {
 		t.Fatalf("a read-only token could not preview: err=%v result=%+v", err, preview)
+	}
+}
+
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buffer bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &buffer
+}
+
+func TestAnInactiveAPIVersionTellsTheOperatorToSetTheVersion(t *testing.T) {
+	logs := captureLogs(t)
+	api := &fakeLinkedIn{postErr: &linkedin.APIError{Status: 426, Code: "NONEXISTENT_VERSION", Message: "not active", Err: linkedin.ErrVersionInactive}}
+	result, _, err := (&Server{LinkedIn: api, Tokens: &fakeTokens{}}).CreatePost(context.Background(), request("mcp-bearer"), PostArgs{Text: "hello", Confirm: true})
+	if err != nil || !result.IsError || !strings.Contains(text(t, result), "LINKEDIN_API_VERSION") {
+		t.Fatalf("err=%v result=%+v", err, result)
+	}
+	if !strings.Contains(logs.String(), "426") || !strings.Contains(logs.String(), "NONEXISTENT_VERSION") {
+		t.Fatalf("log lacks LinkedIn's status and code: %s", logs)
+	}
+}
+
+func TestOtherLinkedInFailuresStayGenericButTheLogHasLinkedInsDetail(t *testing.T) {
+	logs := captureLogs(t)
+	api := &fakeLinkedIn{postErr: &linkedin.APIError{Status: 422, Code: "INVALID_FIELD", ServiceErrorCode: "65600", Message: "bad field"}}
+	result, _, _ := (&Server{LinkedIn: api, Tokens: &fakeTokens{}}).CreatePost(context.Background(), request("mcp-bearer"), PostArgs{Text: "hello", Confirm: true})
+	got := text(t, result)
+	if !result.IsError || got != "LinkedIn could not complete the request." {
+		t.Fatalf("result = %q", got)
+	}
+	for _, want := range []string{"422", "INVALID_FIELD", "65600", "bad field"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("%q missing from log: %s", want, logs)
+		}
 	}
 }

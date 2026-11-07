@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -92,4 +93,61 @@ func containsAny(s string, parts ...string) bool {
 		}
 	}
 	return false
+}
+
+func postError(t *testing.T, status int, body string) error {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+	_, err := New(server.URL, "202610").CreatePost(context.Background(), "tok-secret", "abc", "private post text", VisibilityPublic)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	return err
+}
+
+func TestCreatePostErrorCarriesLinkedInsStatusAndErrorFields(t *testing.T) {
+	err := postError(t, http.StatusUnprocessableEntity,
+		`{"status":422,"code":"INVALID_FIELD","serviceErrorCode":65600,"message":"bad field","echo":"private post text tok-secret"}`)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != 422 {
+		t.Fatalf("err = %v", err)
+	}
+	for _, want := range []string{"422", "INVALID_FIELD", "65600", "bad field"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q missing from %q", want, err.Error())
+		}
+	}
+	for _, leak := range []string{"private post text", "tok-secret"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("%q leaked into %q", leak, err.Error())
+		}
+	}
+}
+
+func TestCreatePostErrorTruncatesLinkedInsMessage(t *testing.T) {
+	err := postError(t, http.StatusBadRequest, `{"message":"`+strings.Repeat("x", 1000)+`"}`)
+	if len(err.Error()) > 400 {
+		t.Fatalf("error is %d bytes", len(err.Error()))
+	}
+}
+
+func TestCreatePostErrorToleratesANonJSONBody(t *testing.T) {
+	err := postError(t, http.StatusBadGateway, "<html>oops</html>")
+	if !strings.Contains(err.Error(), "502") || strings.Contains(err.Error(), "oops") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestHTTP426MeansTheAPIVersionIsNoLongerActive(t *testing.T) {
+	err := postError(t, http.StatusUpgradeRequired, `{"status":426,"code":"NONEXISTENT_VERSION","message":"Requested version 20251001 is not active"}`)
+	if !errors.Is(err, ErrVersionInactive) {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "NONEXISTENT_VERSION") {
+		t.Fatalf("LinkedIn's code is missing from %q", err.Error())
+	}
 }

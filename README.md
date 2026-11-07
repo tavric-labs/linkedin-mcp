@@ -161,7 +161,7 @@ The tool metadata in `servers.yaml` marks `linkedin_create_post` as `high` trust
 | `LINKEDIN_MCP_CLIENT_ID`, `LINKEDIN_MCP_CLIENT_KEY_ID` | The resource client registered in MCP Auth. Required. |
 | `LINKEDIN_MCP_CLIENT_KEY` or `LINKEDIN_MCP_CLIENT_KEY_FILE` | The client's RSA private key (PEM), inline or as a file path; set exactly one. |
 | `LINKEDIN_MCP_TOKEN_DIAL_ADDR` | Optional `host:port` the token exchange connects to instead of the issuer host, for clusters where the public issuer is not reachable. |
-| `LINKEDIN_API_BASE`, `LINKEDIN_API_VERSION` | Defaults `https://api.linkedin.com` and the `Linkedin-Version` header. |
+| `LINKEDIN_API_BASE`, `LINKEDIN_API_VERSION` | Defaults `https://api.linkedin.com` and the `Linkedin-Version` header (`202610`). LinkedIn retires each version about a year after release; HTTP 426 `NONEXISTENT_VERSION` means set a newer one. |
 | `PORT`, `MCP_PATH` | Defaults `8080` and `/mcp`. |
 | `LINKEDIN_MCP_ALLOW_INSECURE=true` | Plain http issuer, local development only. |
 
