@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-07
+
 ### Added
 
 - Apache-2.0 `LICENSE`.
@@ -24,5 +26,6 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   release.
 - Dependabot updates for Go modules, Docker and GitHub Actions.
 
-[Unreleased]: https://github.com/tavric-labs/linkedin-mcp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/tavric-labs/linkedin-mcp/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/tavric-labs/linkedin-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/tavric-labs/linkedin-mcp/releases/tag/v0.1.0
