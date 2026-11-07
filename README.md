@@ -60,3 +60,14 @@ gofmt -l . && go vet ./... && go test -race ./...
 
 Deploy with the MCP Runtime workflow: `server validate`, `server build image`,
 `server push`, `server deploy` using `.mcp/servers.yaml`.
+
+## CI and releases
+
+`.github/workflows/ci.yaml` runs on pull requests and pushes to `main`: gofmt, `go vet`,
+`go build`, `go test -race`, staticcheck, govulncheck, a Docker build and Trivy scans.
+
+Pushing a `v*` tag from a commit on `main` runs `.github/workflows/release.yaml`. It re-runs
+the tests, publishes a multi-arch (`linux/amd64`, `linux/arm64`) image with provenance and an
+SBOM to `ghcr.io/tavric-labs/linkedin-mcp:<tag>` (and `:latest` for stable tags), and creates a
+GitHub release with generated notes. Run the workflow manually with `dry_run` enabled to build
+both platforms without pushing or releasing. Record user-visible changes in `CHANGELOG.md`.
