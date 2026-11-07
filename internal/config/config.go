@@ -20,10 +20,16 @@ type Config struct {
 	// Issuer is the mcp-auth issuer URL. JWKSURL is discovered from it unless set.
 	Issuer, JWKSURL string
 	TokenEndpoint   string
-	ClientID, KeyID string
-	PrivateKey      *rsa.PrivateKey
-	APIBase         string
-	APIVersion      string
+	// TokenDialAddr optionally makes the token exchange connect to this host:port
+	// instead of the issuer host, for clusters where the public issuer is not reachable.
+	TokenDialAddr string
+	// TokenDialStripPrefix is the issuer URL's path, removed from the exchange request
+	// when TokenDialAddr is used, the way a public ingress would before the auth server.
+	TokenDialStripPrefix string
+	ClientID, KeyID      string
+	PrivateKey           *rsa.PrivateKey
+	APIBase              string
+	APIVersion           string
 	// AllowInsecure permits http issuer and token endpoints, for local development.
 	AllowInsecure bool
 }
@@ -42,6 +48,7 @@ func Load(getenv func(string) string) (Config, error) {
 		Resource:      value("LINKEDIN_MCP_RESOURCE", ""),
 		Issuer:        strings.TrimRight(value("LINKEDIN_MCP_ISSUER", ""), "/"),
 		JWKSURL:       value("LINKEDIN_JWKS_URL", ""),
+		TokenDialAddr: value("LINKEDIN_MCP_TOKEN_DIAL_ADDR", ""),
 		ClientID:      value("LINKEDIN_MCP_CLIENT_ID", ""),
 		KeyID:         value("LINKEDIN_MCP_CLIENT_KEY_ID", ""),
 		APIBase:       strings.TrimRight(value("LINKEDIN_API_BASE", "https://api.linkedin.com"), "/"),
@@ -67,6 +74,11 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	config.TokenEndpoint = config.Issuer + "/token"
+	if config.TokenDialAddr != "" {
+		if issuerURL, err := url.Parse(config.Issuer); err == nil {
+			config.TokenDialStripPrefix = strings.TrimRight(issuerURL.Path, "/")
+		}
+	}
 	key, err := clientKey(getenv("LINKEDIN_MCP_CLIENT_KEY"), getenv("LINKEDIN_MCP_CLIENT_KEY_FILE"))
 	if err != nil {
 		return Config{}, err

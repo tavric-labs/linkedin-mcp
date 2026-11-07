@@ -9,6 +9,10 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"strings"
+	"time"
 
 	mcpauth "github.com/Agent-Hellboy/mcp-auth/auth-client/go/mcpauth"
 )
@@ -25,6 +29,16 @@ type Config struct {
 	PrivateKey *rsa.PrivateKey
 	// AllowInsecure permits an http token endpoint, for local development only.
 	AllowInsecure bool
+	// DialAddr, when set, is the host:port to connect to instead of the token
+	// endpoint's own host. The request keeps the endpoint's URL, Host header and
+	// assertion audience, which mcp-auth checks against its issuer. Use it when
+	// the public issuer is not reachable from the pod, as on a local cluster.
+	DialAddr string
+	// DialStripPrefix is removed from the request path when DialAddr is used. A
+	// public ingress strips the issuer's path (for example /mcp-auth) before the
+	// auth server sees the request, so a direct dial has to do the same. Only the
+	// path sent changes; the URL, Host header and assertion audience stay public.
+	DialStripPrefix string
 }
 
 // Source exchanges tokens. It holds no cache: every call is authorised afresh,
@@ -48,14 +62,51 @@ func New(config Config) (*Source, error) {
 	case config.PrivateKey == nil:
 		return nil, errors.New("client private key is required")
 	}
-	return &Source{
-		config: config,
-		client: &mcpauth.TokenExchangeClient{
-			Endpoint:      config.TokenEndpoint,
-			AllowInsecure: config.AllowInsecure,
-			ClientAuth:    &mcpauth.PrivateKeyJWTClientAuth{ClientID: config.ClientID, PrivateKey: config.PrivateKey, KeyID: config.KeyID},
-		},
-	}, nil
+	exchange := &mcpauth.TokenExchangeClient{
+		Endpoint:      config.TokenEndpoint,
+		AllowInsecure: config.AllowInsecure,
+		ClientAuth:    &mcpauth.PrivateKeyJWTClientAuth{ClientID: config.ClientID, PrivateKey: config.PrivateKey, KeyID: config.KeyID},
+	}
+	if config.DialAddr != "" {
+		exchange.HTTPClient = dialingClient(config.DialAddr, config.DialStripPrefix)
+	}
+	return &Source{config: config, client: exchange}, nil
+}
+
+// dialingClient connects every request to addr, whatever host the URL names, and
+// removes stripPrefix from the path it sends. It refuses redirects, as the SDK's
+// own client does.
+func dialingClient(addr, stripPrefix string) *http.Client {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: prefixStripper{prefix: stripPrefix, next: &http.Transport{
+			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return dialer.DialContext(ctx, network, addr)
+			},
+		}},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("token endpoint must not redirect") },
+	}
+}
+
+// prefixStripper removes a path prefix from outgoing requests. The Host header
+// and the rest of the URL are untouched.
+type prefixStripper struct {
+	prefix string
+	next   http.RoundTripper
+}
+
+func (p prefixStripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	if p.prefix != "" && strings.HasPrefix(request.URL.Path, p.prefix) {
+		clone := request.Clone(request.Context())
+		clone.URL.Path = strings.TrimPrefix(clone.URL.Path, p.prefix)
+		clone.URL.RawPath = ""
+		if clone.URL.Path == "" {
+			clone.URL.Path = "/"
+		}
+		request = clone
+	}
+	return p.next.RoundTrip(request)
 }
 
 // MemberToken returns the LinkedIn access token for the person who holds
