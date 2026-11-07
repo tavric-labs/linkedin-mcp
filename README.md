@@ -222,4 +222,4 @@ both platforms without pushing or releasing. Record user-visible changes in `CHA
 
 ## License
 
-No license has been chosen yet. MCP Runtime is Apache-2.0.
+Licensed under the [Apache License 2.0](LICENSE), the same license as [MCP Runtime](https://github.com/tavric-labs/mcp-runtime).
