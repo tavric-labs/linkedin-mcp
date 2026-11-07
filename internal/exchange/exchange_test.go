@@ -102,10 +102,10 @@ func TestNewRequiresEveryField(t *testing.T) {
 }
 
 func TestAnInternalDialAddressKeepsThePublicAudienceAndHost(t *testing.T) {
-	var host string
+	var host, path string
 	var assertion string
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host = r.Host
+		host, path = r.Host, r.URL.Path
 		_ = r.ParseForm()
 		assertion = r.PostForm.Get("client_assertion")
 		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "t", "token_type": "Bearer", "expires_in": 3600})
@@ -114,7 +114,7 @@ func TestAnInternalDialAddressKeepsThePublicAudienceAndHost(t *testing.T) {
 
 	const public = "http://auth.public.invalid:18080/mcp-auth/token"
 	source, err := New(Config{
-		TokenEndpoint: public, DialAddr: endpoint.Listener.Addr().String(), Resource: "https://mcp.example/linkedin/mcp",
+		TokenEndpoint: public, DialAddr: endpoint.Listener.Addr().String(), DialStripPrefix: "/mcp-auth", Resource: "https://mcp.example/linkedin/mcp",
 		ClientID: "c", KeyID: "k", PrivateKey: testKey(t), AllowInsecure: true,
 	})
 	if err != nil {
@@ -122,6 +122,9 @@ func TestAnInternalDialAddressKeepsThePublicAudienceAndHost(t *testing.T) {
 	}
 	if _, err := source.MemberToken(context.Background(), "bearer"); err != nil {
 		t.Fatalf("the exchange did not reach the internal address: %v", err)
+	}
+	if path != "/token" {
+		t.Fatalf("path = %q, want /token: the ingress strips the issuer's path prefix before the auth server, and a direct dial must too", path)
 	}
 	if host != "auth.public.invalid:18080" {
 		t.Fatalf("Host = %q, want the public host so mcp-auth sees the issuer it expects", host)
