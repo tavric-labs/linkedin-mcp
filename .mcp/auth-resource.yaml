@@ -1,0 +1,40 @@
+# Admin-applied sign-in wiring for this server on MCP Runtime. It is not part of
+# servers.yaml, which a tenant deploys: it defines an upstream identity provider and
+# registers this server's resource client, so a cluster administrator applies it.
+#
+# Fill every <...> value, then preview and apply:
+#   mcp-runtime cluster mcp-auth resource apply --file .mcp/auth-resource.yaml \
+#     --kubeconfig <kubeconfig> --context <context> --dry-run
+# Deploy the server first, so MCP Auth already serves its resource. The connector's
+# client secret is never written here: add LINKEDIN_CLIENT_SECRET to the
+# mcp-auth-connector-secrets Secret before applying.
+id: linkedin
+resource_url: <public MCP URL, equal to auth.audience in servers.yaml, e.g. https://mcp.example.com/linkedin/mcp>
+required_scopes: [tools:read, tools:write]
+resource_client:
+  client_id: linkedin-mcp # LINKEDIN_MCP_CLIENT_ID
+  public_key_pem: |
+    <PEM public key for the private key in LINKEDIN_MCP_CLIENT_KEY>
+login:
+  label: Sign in with LinkedIn
+  # Hand the signed-in person's LinkedIn token to this server, which exchanges it.
+  downstream_token: upstream_session
+connector:
+  issuer: https://www.linkedin.com/oauth
+  authorization_endpoint: https://www.linkedin.com/oauth/v2/authorization
+  token_endpoint: https://www.linkedin.com/oauth/v2/accessToken
+  jwks_uri: https://www.linkedin.com/oauth/openid/jwks
+  client_id: <LinkedIn app client ID>
+  client_secret_env: LINKEDIN_CLIENT_SECRET
+  token_endpoint_auth_method: client_secret_post
+  exchange_client_id: <LinkedIn app client ID>
+  scopes: [openid, profile, email, w_member_social]
+  identity_claims: [sub]
+  allowed_upstream_callback_uris:
+    - <MCP Auth issuer URL>/identity/callback
+  # LinkedIn's OIDC discovery document publishes no `nonce` claim and no PKCE
+  # support, and its standard apps answer a PKCE code exchange that carries the client
+  # secret with 401 invalid_client. Both are generic MCP Auth connector settings;
+  # only this server's file turns them off, and both need the client secret above.
+  pkce: false
+  id_token_nonce_policy: disabled

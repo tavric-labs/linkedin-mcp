@@ -39,6 +39,19 @@ expires the tools answer "sign in again" and the person reconnects.
 | `LINKEDIN_API_BASE`, `LINKEDIN_API_VERSION` | Defaults `https://api.linkedin.com` and the `Linkedin-Version` header. |
 | `LINKEDIN_MCP_ALLOW_INSECURE=true` | Plain http issuer, local development only. |
 
+## Sign-in wiring (administrator)
+
+Signing in with LinkedIn is configured in MCP Auth, not in this server. `.mcp/auth-resource.yaml`
+holds everything LinkedIn-specific (endpoints, scopes, `pkce: false`, `id_token_nonce_policy:
+disabled`, and `downstream_token: upstream_session`); fill its `<...>` values and apply it with
+`mcp-runtime cluster mcp-auth resource apply --file .mcp/auth-resource.yaml`. It is applied by an
+administrator and kept out of `servers.yaml`, which a tenant deploys.
+
+In the LinkedIn developer app, add the products **Share on LinkedIn** and **Sign In with LinkedIn
+using OpenID Connect**, and register `<MCP Auth issuer URL>/identity/callback` as a redirect URL.
+LinkedIn's standard apps issue a token of about 60 days and no refresh token, so a person signs in
+again when it expires.
+
 ## Develop
 
 ```bash
