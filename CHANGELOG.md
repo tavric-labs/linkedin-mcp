@@ -6,6 +6,11 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Apache-2.0 `LICENSE`.
+
+
 ## [0.1.0] - 2026-11-07
 
 ### Added
