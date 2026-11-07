@@ -1,0 +1,42 @@
+version: v1
+servers:
+    - name: linkedin
+      description: Read your LinkedIn profile and publish posts as you, signed in through mcp-auth.
+      image: registry.mcpruntime.org/org/linkedin-mcp/linkedin
+      imageTag: dev
+      route: /linkedin/mcp
+      publicPathPrefix: linkedin
+      ingressHost: mcp.mcpruntime.org
+      port: 8080
+      replicas: 1
+      envVars:
+        - name: LINKEDIN_MCP_RESOURCE
+          value: https://mcp.mcpruntime.org/linkedin/mcp
+        - name: LINKEDIN_MCP_ISSUER
+          value: https://auth.mcpruntime.org/mcp-auth
+        - name: LINKEDIN_MCP_CLIENT_ID
+          value: linkedin-mcp
+        - name: LINKEDIN_MCP_CLIENT_KEY_ID
+          value: linkedin-mcp-1
+      secretEnvVars:
+        - name: LINKEDIN_MCP_CLIENT_KEY
+          secretKeyRef:
+            name: linkedin-mcp-client-key
+            key: LINKEDIN_MCP_CLIENT_KEY
+      namespace: mcp-servers
+      auth:
+        issuerURL: https://auth.mcpruntime.org/mcp-auth
+        audience: https://mcp.mcpruntime.org/linkedin/mcp
+        scopes: [tools:read, tools:write]
+      tools:
+        - name: linkedin_get_profile
+          description: Return the signed-in person's LinkedIn name and member id.
+          requiredTrust: low
+          sideEffect: read
+        - name: linkedin_create_post
+          description: Publish a LinkedIn post as the signed-in person; a dry run unless confirm is true.
+          requiredTrust: high
+          sideEffect: write
+      policy:
+        mode: allow-list
+        defaultDecision: deny
