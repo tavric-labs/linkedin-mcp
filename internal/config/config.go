@@ -30,6 +30,9 @@ type Config struct {
 	PrivateKey           *rsa.PrivateKey
 	APIBase              string
 	APIVersion           string
+	// EnableOrgTools registers the organization-page tool. It needs a LinkedIn app
+	// with the Community Management API (w_organization_social).
+	EnableOrgTools bool
 	// AllowInsecure permits http issuer and token endpoints, for local development.
 	AllowInsecure bool
 }
@@ -43,17 +46,18 @@ func Load(getenv func(string) string) (Config, error) {
 		return fallback
 	}
 	config := Config{
-		Port:          value("PORT", "8080"),
-		MCPPath:       value("MCP_PATH", "/mcp"),
-		Resource:      value("LINKEDIN_MCP_RESOURCE", ""),
-		Issuer:        strings.TrimRight(value("LINKEDIN_MCP_ISSUER", ""), "/"),
-		JWKSURL:       value("LINKEDIN_JWKS_URL", ""),
-		TokenDialAddr: value("LINKEDIN_MCP_TOKEN_DIAL_ADDR", ""),
-		ClientID:      value("LINKEDIN_MCP_CLIENT_ID", ""),
-		KeyID:         value("LINKEDIN_MCP_CLIENT_KEY_ID", ""),
-		APIBase:       strings.TrimRight(value("LINKEDIN_API_BASE", "https://api.linkedin.com"), "/"),
-		APIVersion:    value("LINKEDIN_API_VERSION", "202610"),
-		AllowInsecure: value("LINKEDIN_MCP_ALLOW_INSECURE", "") == "true",
+		Port:           value("PORT", "8080"),
+		MCPPath:        value("MCP_PATH", "/mcp"),
+		Resource:       value("LINKEDIN_MCP_RESOURCE", ""),
+		Issuer:         strings.TrimRight(value("LINKEDIN_MCP_ISSUER", ""), "/"),
+		JWKSURL:        value("LINKEDIN_JWKS_URL", ""),
+		TokenDialAddr:  value("LINKEDIN_MCP_TOKEN_DIAL_ADDR", ""),
+		ClientID:       value("LINKEDIN_MCP_CLIENT_ID", ""),
+		KeyID:          value("LINKEDIN_MCP_CLIENT_KEY_ID", ""),
+		APIBase:        strings.TrimRight(value("LINKEDIN_API_BASE", "https://api.linkedin.com"), "/"),
+		APIVersion:     value("LINKEDIN_API_VERSION", "202610"),
+		AllowInsecure:  value("LINKEDIN_MCP_ALLOW_INSECURE", "") == "true",
+		EnableOrgTools: value("LINKEDIN_MCP_ENABLE_ORG_TOOLS", "") == "true",
 	}
 	for name, v := range map[string]string{
 		"LINKEDIN_MCP_RESOURCE": config.Resource, "LINKEDIN_MCP_ISSUER": config.Issuer,
