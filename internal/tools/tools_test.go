@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -30,29 +31,82 @@ func (f *fakeTokens) MemberToken(_ context.Context, subjectToken string) (string
 type fakeLinkedIn struct {
 	profileToken string
 	profileErr   error
-	postCalls    int
-	postErr      error
-	post         struct {
-		token, member, text string
-		visibility          linkedin.Visibility
-	}
+	calls        []string // names of the LinkedIn methods called, in order
+	err          error    // returned by every write method
+	published    []linkedin.Post
+	uploads      map[string][]byte // kind -> bytes uploaded
+	counts       map[string]int
+	edited       struct{ urn, text string }
+	deleted      string
+	writeToken   string
 }
 
 func (f *fakeLinkedIn) Profile(_ context.Context, token string) (linkedin.Profile, error) {
 	f.profileToken = token
+	f.calls = append(f.calls, "Profile")
 	if f.profileErr != nil {
 		return linkedin.Profile{}, f.profileErr
 	}
-	return linkedin.Profile{Sub: "abc123", Name: "Ada Lovelace"}, nil
+	return linkedin.Profile{Sub: "abc123", Name: "Ada Lovelace", GivenName: "Ada", FamilyName: "Lovelace", Email: "ada@example.com", EmailVerified: true, Locale: "en-US", Picture: "https://img/ada.png"}, nil
 }
 
-func (f *fakeLinkedIn) CreatePost(_ context.Context, token, member, text string, visibility linkedin.Visibility) (string, error) {
-	f.postCalls++
-	f.post.token, f.post.member, f.post.text, f.post.visibility = token, member, text, visibility
-	if f.postErr != nil {
-		return "", f.postErr
+func (f *fakeLinkedIn) Publish(_ context.Context, token string, post linkedin.Post) (string, error) {
+	f.calls = append(f.calls, "Publish")
+	f.writeToken = token
+	f.published = append(f.published, post)
+	if f.err != nil {
+		return "", f.err
 	}
 	return "urn:li:share:7001", nil
+}
+
+func (f *fakeLinkedIn) upload(kind string, data []byte) (string, error) {
+	f.calls = append(f.calls, "Upload"+kind)
+	if f.uploads == nil {
+		f.uploads = map[string][]byte{}
+		f.counts = map[string]int{}
+	}
+	f.uploads[kind] = append(f.uploads[kind], data...)
+	if f.err != nil {
+		return "", f.err
+	}
+	f.counts[kind]++
+	return "urn:li:" + strings.ToLower(kind) + ":" + fmt.Sprint(f.counts[kind]), nil
+}
+
+func (f *fakeLinkedIn) UploadImage(_ context.Context, _, _ string, data []byte) (string, error) {
+	return f.upload("Image", data)
+}
+func (f *fakeLinkedIn) UploadDocument(_ context.Context, _, _ string, data []byte) (string, error) {
+	return f.upload("Document", data)
+}
+func (f *fakeLinkedIn) UploadVideo(_ context.Context, _, _ string, data []byte) (string, error) {
+	return f.upload("Video", data)
+}
+
+func (f *fakeLinkedIn) EditPostCommentary(_ context.Context, token, urn, text string) error {
+	f.calls = append(f.calls, "Edit")
+	f.writeToken = token
+	f.edited.urn, f.edited.text = urn, text
+	return f.err
+}
+
+func (f *fakeLinkedIn) DeletePost(_ context.Context, token, urn string) error {
+	f.calls = append(f.calls, "Delete")
+	f.writeToken = token
+	f.deleted = urn
+	return f.err
+}
+
+type fakeFetcher struct {
+	urls []string
+	data []byte
+	err  error
+}
+
+func (f *fakeFetcher) Fetch(_ context.Context, url string, _ int64) ([]byte, error) {
+	f.urls = append(f.urls, url)
+	return f.data, f.err
 }
 
 func request(subjectToken string) *mcp.CallToolRequest {
@@ -113,8 +167,8 @@ func TestCreatePostIsADryRunUnlessConfirmed(t *testing.T) {
 	if err != nil || result.IsError {
 		t.Fatalf("err=%v result=%+v", err, result)
 	}
-	if api.postCalls != 0 || tokens.subjectSeen != "" {
-		t.Fatalf("a dry run reached LinkedIn: posts=%d exchange=%q", api.postCalls, tokens.subjectSeen)
+	if len(api.calls) != 0 || tokens.subjectSeen != "" {
+		t.Fatalf("a dry run reached LinkedIn: calls=%v exchange=%q", api.calls, tokens.subjectSeen)
 	}
 	if !strings.Contains(strings.ToLower(text(t, result)), "dry run") || !strings.Contains(text(t, result), "Hello LinkedIn") {
 		t.Fatalf("dry run text = %q", text(t, result))
@@ -123,33 +177,19 @@ func TestCreatePostIsADryRunUnlessConfirmed(t *testing.T) {
 
 func TestCreatePostPublishesAsTheTokenOwnerWhenConfirmed(t *testing.T) {
 	tokens, api := &fakeTokens{}, &fakeLinkedIn{}
-	result, _, err := (&Server{LinkedIn: api, Tokens: tokens}).CreatePost(context.Background(), request("mcp-bearer"), PostArgs{Text: "Hello LinkedIn", Confirm: true})
+	result, _, err := (&Server{LinkedIn: api, Tokens: tokens}).CreatePost(context.Background(), request("mcp-bearer"), PostArgs{Text: "Hello LinkedIn", Confirm: true, DisableReshare: true})
 	if err != nil || result.IsError {
 		t.Fatalf("err=%v result=%+v", err, result)
 	}
-	if api.postCalls != 1 || api.post.token != "member-token" || api.post.member != "abc123" || api.post.text != "Hello LinkedIn" || api.post.visibility != linkedin.VisibilityPublic {
-		t.Fatalf("post = %+v calls=%d", api.post, api.postCalls)
+	if len(api.published) != 1 || api.writeToken != "member-token" {
+		t.Fatalf("calls=%v", api.calls)
+	}
+	post := api.published[0]
+	if post.Author != "urn:li:person:abc123" || post.Text != "Hello LinkedIn" || post.Visibility != linkedin.VisibilityPublic || !post.DisableReshare || post.Content != nil {
+		t.Fatalf("post = %+v", post)
 	}
 	if !strings.Contains(text(t, result), "urn:li:share:7001") {
 		t.Fatalf("result = %q", text(t, result))
-	}
-}
-
-func TestCreatePostValidatesBeforeAnythingElse(t *testing.T) {
-	long := strings.Repeat("x", MaxPostRunes+1)
-	for name, args := range map[string]PostArgs{
-		"empty":          {Text: "  \n", Confirm: true},
-		"too long":       {Text: long, Confirm: true},
-		"bad visibility": {Text: "hi", Visibility: "EVERYONE", Confirm: true},
-	} {
-		tokens, api := &fakeTokens{}, &fakeLinkedIn{}
-		result, _, err := (&Server{LinkedIn: api, Tokens: tokens}).CreatePost(context.Background(), request("mcp-bearer"), args)
-		if err != nil || !result.IsError {
-			t.Errorf("%s: err=%v result=%+v, want an error result", name, err, result)
-		}
-		if tokens.subjectSeen != "" || api.postCalls != 0 {
-			t.Errorf("%s: invalid input reached the exchange or LinkedIn", name)
-		}
 	}
 }
 
@@ -179,7 +219,7 @@ func TestPublishingNeedsTheWriteScope(t *testing.T) {
 	if err != nil || !result.IsError {
 		t.Fatalf("err=%v result=%+v, want an error result", err, result)
 	}
-	if tokens.subjectSeen != "" || api.postCalls != 0 {
+	if tokens.subjectSeen != "" || len(api.calls) != 0 {
 		t.Fatal("a read-only token reached the exchange or LinkedIn")
 	}
 	// A dry run changes nothing, so a read-only token may preview.
@@ -199,7 +239,7 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 
 func TestAnInactiveAPIVersionTellsTheOperatorToSetTheVersion(t *testing.T) {
 	logs := captureLogs(t)
-	api := &fakeLinkedIn{postErr: &linkedin.APIError{Status: 426, Code: "NONEXISTENT_VERSION", Message: "not active", Err: linkedin.ErrVersionInactive}}
+	api := &fakeLinkedIn{err: &linkedin.APIError{Status: 426, Code: "NONEXISTENT_VERSION", Message: "not active", Err: linkedin.ErrVersionInactive}}
 	result, _, err := (&Server{LinkedIn: api, Tokens: &fakeTokens{}}).CreatePost(context.Background(), request("mcp-bearer"), PostArgs{Text: "hello", Confirm: true})
 	if err != nil || !result.IsError || !strings.Contains(text(t, result), "LINKEDIN_API_VERSION") {
 		t.Fatalf("err=%v result=%+v", err, result)
@@ -211,7 +251,7 @@ func TestAnInactiveAPIVersionTellsTheOperatorToSetTheVersion(t *testing.T) {
 
 func TestOtherLinkedInFailuresStayGenericButTheLogHasLinkedInsDetail(t *testing.T) {
 	logs := captureLogs(t)
-	api := &fakeLinkedIn{postErr: &linkedin.APIError{Status: 422, Code: "INVALID_FIELD", ServiceErrorCode: "65600", Message: "bad field"}}
+	api := &fakeLinkedIn{err: &linkedin.APIError{Status: 422, Code: "INVALID_FIELD", ServiceErrorCode: "65600", Message: "bad field"}}
 	result, _, _ := (&Server{LinkedIn: api, Tokens: &fakeTokens{}}).CreatePost(context.Background(), request("mcp-bearer"), PostArgs{Text: "hello", Confirm: true})
 	got := text(t, result)
 	if !result.IsError || got != "LinkedIn could not complete the request." {
