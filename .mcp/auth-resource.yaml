@@ -28,6 +28,10 @@ connector:
   client_secret_env: LINKEDIN_CLIENT_SECRET
   token_endpoint_auth_method: client_secret_post
   exchange_client_id: <LinkedIn app client ID>
+  # openid + profile (+ email) come from "Sign In with LinkedIn using OpenID Connect" and
+  # w_member_social from "Share on LinkedIn". The organization tool additionally needs
+  # w_organization_social, which only a Community Management API app can request; add it
+  # here only if you set LINKEDIN_MCP_ENABLE_ORG_TOOLS=true.
   scopes: [openid, profile, email, w_member_social]
   identity_claims: [sub]
   allowed_upstream_callback_uris:
