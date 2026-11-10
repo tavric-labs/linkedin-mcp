@@ -117,3 +117,18 @@ func TestLoadReadsTheClientKeyFromTheEnvironment(t *testing.T) {
 		t.Fatal("a key file and an inline key were both accepted")
 	}
 }
+
+func TestOrganizationToolsAreOffUnlessEnabled(t *testing.T) {
+	values := baseEnv(t)
+	config, err := Load(env(values))
+	if err != nil || config.EnableOrgTools {
+		t.Fatalf("default: err=%v enabled=%v", err, config.EnableOrgTools)
+	}
+	for value, want := range map[string]bool{"true": true, "false": false, "1": false, "yes": false} {
+		values["LINKEDIN_MCP_ENABLE_ORG_TOOLS"] = value
+		config, err := Load(env(values))
+		if err != nil || config.EnableOrgTools != want {
+			t.Errorf("%q: err=%v enabled=%v, want %v", value, err, config.EnableOrgTools, want)
+		}
+	}
+}

@@ -1,7 +1,7 @@
 version: v1
 servers:
     - name: linkedin
-      description: Read your LinkedIn profile and publish posts as you, signed in through mcp-auth.
+      description: Read your LinkedIn profile and publish, edit and delete posts as you, signed in through mcp-auth.
       image: registry.mcpruntime.org/org/linkedin-mcp/linkedin
       imageTag: dev
       route: /linkedin/mcp
@@ -30,13 +30,51 @@ servers:
         scopes: [tools:read, tools:write]
       tools:
         - name: linkedin_get_profile
-          description: Return the signed-in person's LinkedIn name and member id.
+          description: Return the signed-in person's LinkedIn name, member id and optional email, locale and picture.
           requiredTrust: low
           sideEffect: read
         - name: linkedin_create_post
-          description: Publish a LinkedIn post as the signed-in person; a dry run unless confirm is true.
+          description: Publish a text post as the signed-in person; a dry run unless confirm is true.
           requiredTrust: high
           sideEffect: write
+        - name: linkedin_create_article_post
+          description: Share a link with a title, description and card image as the signed-in person; a dry run unless confirm is true.
+          requiredTrust: high
+          sideEffect: write
+        - name: linkedin_create_image_post
+          description: Publish an image or multi-image post as the signed-in person; a dry run unless confirm is true.
+          requiredTrust: high
+          sideEffect: write
+        - name: linkedin_create_video_post
+          description: Publish an MP4 video post as the signed-in person; a dry run unless confirm is true.
+          requiredTrust: high
+          sideEffect: write
+        - name: linkedin_create_document_post
+          description: Publish a PDF or Office document post as the signed-in person; a dry run unless confirm is true.
+          requiredTrust: high
+          sideEffect: write
+        - name: linkedin_create_poll_post
+          description: Publish a poll as the signed-in person; a dry run unless confirm is true.
+          requiredTrust: high
+          sideEffect: write
+        - name: linkedin_reshare_post
+          description: Reshare an existing post as the signed-in person; a dry run unless confirm is true.
+          requiredTrust: high
+          sideEffect: write
+        - name: linkedin_edit_post
+          description: Replace the text of the signed-in person's own post; a dry run unless confirm is true.
+          requiredTrust: high
+          sideEffect: write
+        - name: linkedin_delete_post
+          description: Permanently delete the signed-in person's own post; a dry run unless confirm is true.
+          requiredTrust: high
+          sideEffect: write
+        # Registered only when LINKEDIN_MCP_ENABLE_ORG_TOOLS=true and the LinkedIn app has the
+        # Community Management API (w_organization_social); keep it commented out otherwise.
+        # - name: linkedin_create_organization_post
+        #   description: Publish a text post as an organization page the signed-in person administers; a dry run unless confirm is true.
+        #   requiredTrust: high
+        #   sideEffect: write
       policy:
         mode: allow-list
         defaultDecision: deny

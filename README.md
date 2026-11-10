@@ -1,7 +1,8 @@
 # linkedin-mcp
 
 A remote MCP server (streamable HTTP) that lets an AI agent read the signed-in person's own
-LinkedIn profile and create LinkedIn posts as them. Posts are a **dry run unless
+LinkedIn profile and publish, edit and delete LinkedIn posts as them: text, link, image,
+multi-image, video, document, poll and reshare. Every write is a **dry run unless
 `confirm: true`**.
 
 Each person's LinkedIn token comes from an OAuth token exchange
@@ -25,25 +26,113 @@ what, and to decide who may do it:
   denied). The server also logs the subject, tool and outcome, never a token or post text.
 - **Policy control.** Access is decided by the platform, not by whoever holds a credential:
   grants and sessions say who may call which tool. Reading needs the `tools:read` scope and
-  publishing needs `tools:write`. The write tool previews by default, and the server refuses
-  to publish for a token without `tools:write`.
+  changing anything needs `tools:write`. Every write tool previews by default, and the server
+  refuses to confirm one for a token without `tools:write`.
 - **Per-user consent.** People sign in with LinkedIn's real OAuth flow. No pasted browser
   cookies, no shared personal access token. Ending a person's MCP Auth session ends their
   access to LinkedIn through this server at once.
 - **Remote and deployable.** Run it once for a team instead of a local stdio process on every
   laptop holding personal credentials.
 
-What it does not do: it is deliberately small (two tools, no search, no messaging, no
-reading other people's profiles or feeds), and it depends on MCP Auth and, for the audit and
+What it does not do: it only writes the signed-in person's own posts. There is no search, no
+messaging, no reading of posts, comments, reactions, analytics or other people's profiles
+(see [What is not possible](#what-is-not-possible-and-why)), and it depends on MCP Auth and, for the audit and
 policy benefits above, on MCP Runtime's gateway. Run standalone, you get the identity and the
 dry-run default but no platform audit or grants.
 
 ## Tools
 
-| Tool | Scope | Notes |
-|---|---|---|
-| `linkedin_get_profile` | `tools:read` | The signed-in person's name and member id. |
-| `linkedin_create_post` | `tools:write` to publish | A **dry run** unless `confirm: true`. Up to 3000 characters; visibility `PUBLIC` (default) or `CONNECTIONS`. |
+Every write tool is a **dry run unless `confirm: true`**: a dry run validates the input and
+returns a preview, makes no LinkedIn call, downloads nothing and needs only `tools:read`.
+Confirming needs `tools:write`. LinkedIn product: **Sign In** is "Sign In with LinkedIn using
+OpenID Connect" (`openid`, `profile`, `email`); **Share** is "Share on LinkedIn"
+(`w_member_social`), which is self-serve.
+
+| Tool | Scope | LinkedIn product and endpoint | Notes |
+|---|---|---|---|
+| `linkedin_get_profile` | `tools:read` | Sign In: `GET /v2/userinfo` | Name and member id; also given and family name, email, locale and picture when LinkedIn shares them. |
+| `linkedin_create_post` | `tools:write` to confirm | Share: `POST /rest/posts` | Text up to 3000 characters; visibility `PUBLIC` (default) or `CONNECTIONS`; `disable_reshare`. |
+| `linkedin_create_article_post` | `tools:write` to confirm | Share: `POST /rest/posts` (+ Images API for the card image) | A link post. LinkedIn does not read the page, so you give the title, optional description and optional thumbnail (URL or base64). `url` must be https. |
+| `linkedin_create_image_post` | `tools:write` to confirm | Share: Images API `initializeUpload` + upload, then `POST /rest/posts` | 1 to 20 images (JPEG, PNG, GIF; 10 MB each, 40 MB total), URL or base64, optional alt text. Two or more make a multi-image post. |
+| `linkedin_create_video_post` | `tools:write` to confirm | Share: Videos API `initializeUpload`, part uploads, `finalizeUpload`, then `POST /rest/posts` | One MP4, 75 KB to 100 MB from a URL (10 MB as base64). LinkedIn processes it afterwards, so it may take minutes to appear. |
+| `linkedin_create_document_post` | `tools:write` to confirm | Share: Documents API `initializeUpload` + upload, then `POST /rest/posts` | PDF, PPT, PPTX, DOC or DOCX, up to 50 MB from a URL (10 MB as base64); a title is required. |
+| `linkedin_create_poll_post` | `tools:write` to confirm | Share: `POST /rest/posts` with poll content | Question up to 140 characters, 2 to 4 options of up to 30, duration `ONE_DAY`, `THREE_DAYS` (default), `SEVEN_DAYS` or `FOURTEEN_DAYS`. |
+| `linkedin_reshare_post` | `tools:write` to confirm | Share: `POST /rest/posts` with `reshareContext.parent` | `post_urn` is `urn:li:share:<id>` or `urn:li:ugcPost:<id>`; optional commentary. |
+| `linkedin_edit_post` | `tools:write` to confirm | Share: `POST /rest/posts/{urn}` partial update | Replaces the text of your own post. Only the text can be edited. |
+| `linkedin_delete_post` | `tools:write` to confirm | Share: `DELETE /rest/posts/{urn}` | Permanently deletes your own post. |
+| `linkedin_create_organization_post` | `tools:write` to confirm | Community Management API: `POST /rest/posts` as `urn:li:organization:<id>` | **Registered only when `LINKEDIN_MCP_ENABLE_ORG_TOOLS=true`.** Needs `w_organization_social` and a page role; see below. |
+
+Post text is plain text. Characters LinkedIn's "little" format reserves (`( ) [ ] { } < > @ | * _ ~ \`)
+are escaped so they show literally; `#hashtags` still work. Mentions are not supported.
+
+Examples (what a model sends, shown as arguments):
+
+```json
+{"tool": "linkedin_create_post", "arguments": {"text": "Shipped v0.2.0 today.", "visibility": "PUBLIC"}}
+```
+
+The same call with `"confirm": true` publishes it. A multi-image post:
+
+```json
+{"tool": "linkedin_create_image_post", "arguments": {
+  "text": "Conference notes",
+  "images": [
+    {"url": "https://example.com/slide1.png", "alt_text": "Opening keynote"},
+    {"base64": "iVBORw0KGgo...", "alt_text": "Whiteboard"}
+  ],
+  "confirm": true}}
+```
+
+### Files from URLs and base64
+
+An image, document or video comes as exactly one of `url` or `base64`. A URL must be `https`
+on port 443 with no credentials, and the server refuses loopback, private, link-local,
+carrier-grade NAT and other reserved addresses. It checks the address it actually connects to,
+so a hostname that resolves to a private address, or a redirect to one, fails too. It follows
+at most three redirects, uses no proxy and sends no credentials, and stops reading at the
+size cap. Files are identified by their bytes (JPEG, PNG, GIF, PDF, OOXML, MP4), never by
+the name or `Content-Type` a server claims, and images over LinkedIn's pixel limit are
+refused. A URL is downloaded only when `confirm` is `true`; a dry run only checks its syntax.
+
+## What is not possible and why
+
+LinkedIn gates these behind products and permissions that a self-serve app does not have.
+This server does not fake them.
+
+### Requires LinkedIn Community Management API access
+
+The Community Management API is a vetted product with an application and review. LinkedIn
+asks that it be requested on an app that has no other products, so it means a separate app
+and its own sign-in wiring. Until you have it, these are **not available**:
+
+- Reading your own posts or anyone's (`GET /rest/posts`): `r_member_social`, a closed permission
+  LinkedIn is not granting.
+- Comments and reactions (likes) on posts, creating, reading or deleting them: LinkedIn's
+  current Comments and Reactions API pages require `w_member_social_feed` and
+  `r_member_social_feed`, which belong to the Community Management API. `w_member_social`
+  alone is not documented to allow them, so the tools are left out rather than guessed.
+- Post, follower, page and video analytics, follower statistics.
+- Organization pages: reading them, managing them, and their analytics
+  (`r_organization_social`, `rw_organization_admin`). Posting to a page is the optional tool
+  above, which needs `w_organization_social`.
+- Reading other people's profiles, searching, messaging and connections: no self-serve API.
+
+### Optional: organization posting
+
+Set `LINKEDIN_MCP_ENABLE_ORG_TOOLS=true` to register `linkedin_create_organization_post`. It is
+only useful when the LinkedIn app has the Community Management API **and** the connector in
+`.mcp/auth-resource.yaml` requests `w_organization_social`, **and** the signed-in person is an
+administrator, content admin or direct sponsored content poster of that page. Without the
+permission LinkedIn answers 403 and the tool reports that the person's LinkedIn access does
+not allow it. Uncomment the tool in `.mcp/servers.yaml` too, since its policy denies tools
+that are not listed.
+
+### Not verified against live LinkedIn
+
+All requests are tested against fakes built from LinkedIn's documentation, never the live API.
+Two behaviors depend on LinkedIn accepting a plain member token and are worth a manual check
+after your first deploy: `linkedin_edit_post` and `linkedin_delete_post` (the documentation
+does not list a separate permission for them), and video processing after upload.
 
 ## How it works
 
@@ -68,8 +157,10 @@ credential store.
 - The redirect URL registered in the LinkedIn app must match exactly (see step 1 below).
 - LinkedIn's standard apps do not support PKCE with a client secret and publish no ID token
   `nonce`, so the connector turns both off (`pkce: false`, `id_token_nonce_policy: disabled`).
-- Only the signed-in person's own profile and posts. It makes two LinkedIn calls: `userinfo`
-  and publish a post.
+- Only the signed-in person's own profile and posts. Share on LinkedIn allows about 150
+  requests per member per day, and a multi-image post uses one request per image plus two.
+- LinkedIn's Images API cannot be read back with `w_member_social` alone, so the server does
+  not check an image's processing status; a bad image fails when LinkedIn publishes the post.
 
 ## How we run it
 
@@ -119,13 +210,30 @@ URL), and `LINKEDIN_MCP_ISSUER` and `auth.issuerURL` (your MCP Auth issuer URL).
 
 ```bash
 mcp-runtime server validate --metadata-dir .mcp
-mcp-runtime server build image linkedin --tag v0.1.0
-mcp-runtime server push --image <registry>/<team>/linkedin-mcp/linkedin:v0.1.0 --scope tenant
+mcp-runtime server build image linkedin --tag v0.2.0
+mcp-runtime server push --image <registry>/<team>/linkedin-mcp/linkedin:v0.2.0 --scope tenant
 mcp-runtime server deploy linkedin --scope tenant --metadata-dir .mcp
 ```
 
 Use the exact image ref that `server build image` prints, and set `image` and `imageTag` in
-`servers.yaml` to match. `server init` can scaffold metadata for a new server, but this repo
+`servers.yaml` to match.
+
+**Deploying with `--scope org`** (a server shared by the whole platform instead of one team).
+We hit both of these on the live deployment:
+
+- The image path must be `registry.<host>/org/<name>`, for example
+  `registry.mcpruntime.org/org/linkedin-mcp/linkedin`, and you push with `--scope org`. A
+  tenant path such as `<registry>/<team>/...` is not accepted for an org-scope server.
+- The server runs in the namespace `mcp-servers-org`, not `mcp-servers`, so the
+  `linkedin-mcp-client-key` Secret from step 2 must be created there
+  (`kubectl -n mcp-servers-org create secret generic ...`). A Secret in `mcp-servers` leaves the
+  pod stuck waiting for it.
+
+```bash
+mcp-runtime server push --image registry.<host>/org/linkedin-mcp/linkedin:v0.2.0 --scope org
+mcp-runtime server deploy linkedin --scope org --metadata-dir .mcp
+```
+ `server init` can scaffold metadata for a new server, but this repo
 already ships it. You can also use the published image
 `ghcr.io/tavric-labs/linkedin-mcp` once a release is tagged.
 
@@ -149,8 +257,11 @@ administrator applies.
 **6. Grant access and connect.** Create access grants and sessions for the people and agents
 that may call the tools ([teams and access](https://github.com/tavric-labs/mcp-runtime/blob/main/docs/teams-and-access.md)),
 point an MCP client at your `LINKEDIN_MCP_RESOURCE` URL, and sign in with LinkedIn when asked.
-The tool metadata in `servers.yaml` marks `linkedin_create_post` as `high` trust and
-`write`, so a grant can allow reading without allowing posting.
+The tool metadata in `servers.yaml` marks every posting tool as `high` trust and `write`, so a
+grant can allow reading without allowing posting. The server's policy is `allow-list` with
+`defaultDecision: deny`: a tool that is not listed in `servers.yaml` is denied, so add any
+tool you add to the code there too (a test fails if they drift). Grants that predate v0.2.0
+cover only the tools they named.
 
 ## Configuration
 
@@ -162,6 +273,7 @@ The tool metadata in `servers.yaml` marks `linkedin_create_post` as `high` trust
 | `LINKEDIN_MCP_CLIENT_KEY` or `LINKEDIN_MCP_CLIENT_KEY_FILE` | The client's RSA private key (PEM), inline or as a file path; set exactly one. |
 | `LINKEDIN_MCP_TOKEN_DIAL_ADDR` | Optional `host:port` the token exchange connects to instead of the issuer host, for clusters where the public issuer is not reachable. |
 | `LINKEDIN_API_BASE`, `LINKEDIN_API_VERSION` | Defaults `https://api.linkedin.com` and the `Linkedin-Version` header (`202610`). LinkedIn retires each version about a year after release; HTTP 426 `NONEXISTENT_VERSION` means set a newer one. |
+| `LINKEDIN_MCP_ENABLE_ORG_TOOLS=true` | Registers `linkedin_create_organization_post`. Off by default; needs the Community Management API (see above). |
 | `PORT`, `MCP_PATH` | Defaults `8080` and `/mcp`. |
 | `LINKEDIN_MCP_ALLOW_INSECURE=true` | Plain http issuer, local development only. |
 
@@ -199,8 +311,14 @@ UID 65532.
 - The exchange refuses plain-http endpoints unless `LINKEDIN_MCP_ALLOW_INSECURE=true`.
 - The private resource key is a secret: keep it in a Kubernetes Secret or a mounted file, never
   in git or an image.
-- Posts publish only with `confirm: true` and the `tools:write` scope; treat a grant that
-  allows `linkedin_create_post` as permission to post publicly as that person.
+- Writes happen only with `confirm: true` and the `tools:write` scope; treat a grant that
+  allows any posting tool as permission to act publicly as that person, including editing and
+  deleting their posts.
+- URLs the caller supplies are fetched by the server, so they are restricted as described under
+  [Files from URLs and base64](#files-from-urls-and-base64). Upload URLs LinkedIn returns must be
+  `https` on a `linkedin.com` host before any byte or token is sent to them.
+- Post text and file contents are never logged; the log records the subject, tool, outcome and
+  counts, plus LinkedIn's status and error code on a failure.
 - To report a vulnerability, open a private security advisory on this repository.
 
 ## Develop

@@ -23,6 +23,7 @@ import (
 	"github.com/tavric-labs/linkedin-mcp/internal/exchange"
 	"github.com/tavric-labs/linkedin-mcp/internal/identity"
 	"github.com/tavric-labs/linkedin-mcp/internal/linkedin"
+	"github.com/tavric-labs/linkedin-mcp/internal/media"
 	"github.com/tavric-labs/linkedin-mcp/internal/tools"
 )
 
@@ -59,18 +60,11 @@ func run() error {
 		return err
 	}
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "linkedin-mcp", Version: "0.1.0"}, &mcp.ServerOptions{
-		Instructions: "Read the signed-in person's LinkedIn profile and publish posts as them. Posts are a dry run unless confirm is true.",
+	server := mcp.NewServer(&mcp.Implementation{Name: "linkedin-mcp", Version: "0.2.0"}, &mcp.ServerOptions{
+		Instructions: "Read the signed-in person's LinkedIn profile and publish, edit and delete their posts (text, link, image, video, document, poll, reshare). Every write is a dry run unless confirm is true. Reading posts, comments, reactions and analytics is not available.",
 	})
-	handlers := &tools.Server{LinkedIn: linkedin.New(cfg.APIBase, cfg.APIVersion), Tokens: tokens}
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "linkedin_get_profile",
-		Description: "Return the signed-in person's LinkedIn name and member id. Read only.",
-	}, handlers.GetProfile)
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "linkedin_create_post",
-		Description: "Publish a LinkedIn post as the signed-in person. Without confirm: true it only previews the post.",
-	}, handlers.CreatePost)
+	handlers := &tools.Server{LinkedIn: linkedin.New(cfg.APIBase, cfg.APIVersion), Tokens: tokens, Fetcher: media.NewFetcher()}
+	handlers.Register(server, cfg.EnableOrgTools)
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{JSONResponse: true})
 	metadataURL, err := protectedResourceMetadataURL(cfg.Resource)
@@ -90,8 +84,8 @@ func run() error {
 
 	httpServer := &http.Server{
 		Addr: ":" + cfg.Port, Handler: mux,
-		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
-		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 60 * time.Second,
+		WriteTimeout: 6 * time.Minute, IdleTimeout: 60 * time.Second,
 	}
 	stop, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

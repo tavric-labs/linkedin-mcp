@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -65,11 +66,45 @@ const (
 	VisibilityConnections Visibility = "CONNECTIONS"
 )
 
-// Profile is the OpenID Connect userinfo LinkedIn returns for a member.
+// Profile is the OpenID Connect userinfo LinkedIn returns for a member. Name
+// fields need the profile scope and Email needs the email scope; a field the
+// token was not granted stays empty.
 type Profile struct {
-	Sub     string `json:"sub"`
-	Name    string `json:"name"`
-	Picture string `json:"picture"`
+	Sub           string `json:"sub"`
+	Name          string `json:"name"`
+	GivenName     string `json:"given_name"`
+	FamilyName    string `json:"family_name"`
+	Picture       string `json:"picture"`
+	Locale        string `json:"-"`
+	Email         string `json:"email"`
+	EmailVerified bool   `json:"email_verified"`
+}
+
+// UnmarshalJSON accepts locale as the documented string ("en-US") or as the
+// object LinkedIn has also returned ({"country":"US","language":"en"}).
+func (p *Profile) UnmarshalJSON(data []byte) error {
+	type plain Profile
+	var raw struct {
+		plain
+		Locale json.RawMessage `json:"locale"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*p = Profile(raw.plain)
+	var text string
+	if json.Unmarshal(raw.Locale, &text) == nil {
+		p.Locale = text
+		return nil
+	}
+	var object struct{ Language, Country string }
+	if json.Unmarshal(raw.Locale, &object) == nil && object.Language != "" {
+		p.Locale = object.Language
+		if object.Country != "" {
+			p.Locale += "-" + object.Country
+		}
+	}
+	return nil
 }
 
 // Client calls the LinkedIn API. BaseURL and Version are injectable so tests
@@ -78,20 +113,33 @@ type Client struct {
 	baseURL string
 	version string
 	http    *http.Client
+	upload  *http.Client
+	// allowUploadURL decides whether an upload URL from LinkedIn may receive
+	// bytes (and, for images and documents, the member token).
+	allowUploadURL func(*url.URL) bool
 }
 
 // New returns a client for the API at baseURL, sending version as the
 // Linkedin-Version header on versioned (/rest) calls.
 func New(baseURL, version string) *Client {
+	noRedirect := func(*http.Request, []*http.Request) error { return errors.New("linkedin must not redirect") }
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		version: version,
-		http: &http.Client{
-			Timeout: 15 * time.Second,
-			// A token must never follow a redirect to another host.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("linkedin api must not redirect") },
-		},
+		// A token must never follow a redirect to another host.
+		http:           &http.Client{Timeout: 15 * time.Second, CheckRedirect: noRedirect},
+		upload:         &http.Client{Timeout: 5 * time.Minute, CheckRedirect: noRedirect},
+		allowUploadURL: defaultAllowUploadURL,
 	}
+}
+
+// defaultAllowUploadURL accepts only https URLs on linkedin.com or a subdomain.
+func defaultAllowUploadURL(u *url.URL) bool {
+	if u == nil || u.Scheme != "https" || u.User != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "linkedin.com" || strings.HasSuffix(host, ".linkedin.com")
 }
 
 // Profile returns the member the token belongs to.
@@ -119,36 +167,136 @@ func (c *Client) Profile(ctx context.Context, token string) (Profile, error) {
 	return profile, nil
 }
 
-// CreatePost publishes text as the member whose id is memberID and returns the
-// new post's URN.
-func (c *Client) CreatePost(ctx context.Context, token, memberID, text string, visibility Visibility) (string, error) {
-	if visibility != VisibilityPublic && visibility != VisibilityConnections {
+// PersonURN returns the URN of the member with the given id.
+func PersonURN(id string) string { return "urn:li:person:" + id }
+
+// OrganizationURN returns the URN of the organization page with the given id.
+func OrganizationURN(id string) string { return "urn:li:organization:" + id }
+
+var (
+	authorURN   = regexp.MustCompile(`^urn:li:(person|organization):[A-Za-z0-9_-]+$`)
+	postURN     = regexp.MustCompile(`^urn:li:(share|ugcPost):[0-9]+$`)
+	littleSpecs = strings.NewReplacer(
+		`\`, `\\`, "|", `\|`, "{", `\{`, "}", `\}`, "@", `\@`, "[", `\[`, "]", `\]`,
+		"(", `\(`, ")", `\)`, "<", `\<`, ">", `\>`, "*", `\*`, "_", `\_`, "~", `\~`,
+	)
+)
+
+// ValidPostURN reports whether urn is a share or ugcPost URN.
+func ValidPostURN(urn string) bool { return postURN.MatchString(urn) }
+
+// EscapeCommentary escapes the characters LinkedIn's "little" text format
+// reserves, so post text shows literally instead of being cut off at a
+// parenthesis or turned into a mention. A "#" is left alone so #hashtags work.
+func EscapeCommentary(text string) string { return littleSpecs.Replace(text) }
+
+// Post is a LinkedIn post to publish. Text is plain text; it is escaped for
+// LinkedIn's little format. Content and ReshareParent are optional.
+type Post struct {
+	Author         string
+	Text           string
+	Visibility     Visibility
+	DisableReshare bool
+	Content        map[string]any
+	ReshareParent  string
+}
+
+// Image is an uploaded image to attach to a post.
+type Image struct{ URN, AltText string }
+
+// PollDuration is how long a poll accepts votes.
+type PollDuration string
+
+const (
+	PollOneDay       PollDuration = "ONE_DAY"
+	PollThreeDays    PollDuration = "THREE_DAYS"
+	PollSevenDays    PollDuration = "SEVEN_DAYS"
+	PollFourteenDays PollDuration = "FOURTEEN_DAYS"
+)
+
+// ArticleContent is a link post. Description and thumbnail (an image URN) are
+// optional; LinkedIn does not scrape the URL, so these set the preview card.
+func ArticleContent(source, title, description, thumbnail string) map[string]any {
+	article := map[string]any{"source": source, "title": title}
+	if description != "" {
+		article["description"] = description
+	}
+	if thumbnail != "" {
+		article["thumbnail"] = thumbnail
+	}
+	return map[string]any{"article": article}
+}
+
+// ImageContent is one image (media) or two or more images (multiImage).
+func ImageContent(images []Image) map[string]any {
+	entries := make([]map[string]any, 0, len(images))
+	for _, image := range images {
+		entry := map[string]any{"id": image.URN}
+		if image.AltText != "" {
+			entry["altText"] = image.AltText
+		}
+		entries = append(entries, entry)
+	}
+	if len(entries) == 1 {
+		return map[string]any{"media": entries[0]}
+	}
+	return map[string]any{"multiImage": map[string]any{"images": entries}}
+}
+
+// MediaContent is a video or document post; id is its video or document URN.
+func MediaContent(id, title string) map[string]any {
+	media := map[string]any{"id": id}
+	if title != "" {
+		media["title"] = title
+	}
+	return map[string]any{"media": media}
+}
+
+// PollContent is a poll with two to four options.
+func PollContent(question string, options []string, duration PollDuration) map[string]any {
+	entries := make([]map[string]any, 0, len(options))
+	for _, option := range options {
+		entries = append(entries, map[string]any{"text": option})
+	}
+	return map[string]any{"poll": map[string]any{
+		"question": question,
+		"options":  entries,
+		"settings": map[string]any{"duration": string(duration)},
+	}}
+}
+
+// Publish creates the post and returns its URN.
+func (c *Client) Publish(ctx context.Context, token string, post Post) (string, error) {
+	if !authorURN.MatchString(post.Author) {
+		return "", errors.New("author must be a person or organization URN")
+	}
+	if post.Visibility != VisibilityPublic && post.Visibility != VisibilityConnections {
 		return "", fmt.Errorf("visibility must be %s or %s", VisibilityPublic, VisibilityConnections)
 	}
-	body, err := json.Marshal(map[string]any{
-		"author":         "urn:li:person:" + url.PathEscape(memberID),
-		"commentary":     text,
-		"visibility":     string(visibility),
+	if post.ReshareParent != "" && !postURN.MatchString(post.ReshareParent) {
+		return "", errors.New("the post to reshare must be a share or ugcPost URN")
+	}
+	body := map[string]any{
+		"author":         post.Author,
+		"visibility":     string(post.Visibility),
 		"lifecycleState": "PUBLISHED",
 		"distribution": map[string]any{
 			"feedDistribution":               "MAIN_FEED",
 			"targetEntities":                 []any{},
 			"thirdPartyDistributionChannels": []any{},
 		},
-		"isReshareDisabledByAuthor": false,
-	})
-	if err != nil {
-		return "", err
+		"isReshareDisabledByAuthor": post.DisableReshare,
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/rest/posts", bytes.NewReader(body))
-	if err != nil {
-		return "", err
+	if post.Text != "" || post.ReshareParent == "" {
+		body["commentary"] = EscapeCommentary(post.Text)
 	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Linkedin-Version", c.version)
-	request.Header.Set("X-Restli-Protocol-Version", "2.0.0")
-	response, err := c.http.Do(request)
+	if post.Content != nil {
+		body["content"] = post.Content
+	}
+	if post.ReshareParent != "" {
+		body["reshareContext"] = map[string]any{"parent": post.ReshareParent}
+	}
+	response, err := c.versioned(ctx, token, http.MethodPost, "/rest/posts", body, nil)
 	if err != nil {
 		return "", fmt.Errorf("linkedin create post: %w", err)
 	}
@@ -157,6 +305,65 @@ func (c *Client) CreatePost(ctx context.Context, token, memberID, text string, v
 		return "", apiError(response)
 	}
 	return response.Header.Get("X-Restli-Id"), nil
+}
+
+// EditPostCommentary replaces the text of one of the member's posts.
+func (c *Client) EditPostCommentary(ctx context.Context, token, urn, text string) error {
+	if !postURN.MatchString(urn) {
+		return errors.New("the post must be a share or ugcPost URN")
+	}
+	patch := map[string]any{"patch": map[string]any{"$set": map[string]any{"commentary": EscapeCommentary(text)}}}
+	return c.noContent(ctx, token, http.MethodPost, "/rest/posts/"+encodeURN(urn), patch, map[string]string{"X-RestLi-Method": "PARTIAL_UPDATE"})
+}
+
+// DeletePost deletes one of the member's posts. Deleting a post that is
+// already gone succeeds.
+func (c *Client) DeletePost(ctx context.Context, token, urn string) error {
+	if !postURN.MatchString(urn) {
+		return errors.New("the post must be a share or ugcPost URN")
+	}
+	return c.noContent(ctx, token, http.MethodDelete, "/rest/posts/"+encodeURN(urn), nil, map[string]string{"X-RestLi-Method": "DELETE"})
+}
+
+func encodeURN(urn string) string { return strings.ReplaceAll(url.PathEscape(urn), ":", "%3A") }
+
+func (c *Client) noContent(ctx context.Context, token, method, path string, body any, extra map[string]string) error {
+	response, err := c.versioned(ctx, token, method, path, body, extra)
+	if err != nil {
+		return fmt.Errorf("linkedin %s: %w", strings.ToLower(method), err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return apiError(response)
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<16))
+	return nil
+}
+
+// versioned sends a /rest call with the required version and protocol headers.
+func (c *Client) versioned(ctx context.Context, token, method, path string, body any, extra map[string]string) (*http.Response, error) {
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		reader = bytes.NewReader(encoded)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Linkedin-Version", c.version)
+	request.Header.Set("X-Restli-Protocol-Version", "2.0.0")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	for name, value := range extra {
+		request.Header.Set(name, value)
+	}
+	return c.http.Do(request)
 }
 
 // statusError turns a non-2xx response into an error that carries only the
@@ -212,4 +419,8 @@ func detail(value any) string {
 		text = text[:maxDetail]
 	}
 	return text
+}
+
+func decodeJSON(r io.Reader, out any) error {
+	return json.NewDecoder(io.LimitReader(r, 1<<20)).Decode(out)
 }

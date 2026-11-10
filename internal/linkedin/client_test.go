@@ -44,7 +44,7 @@ func TestAnExpiredOrRevokedTokenIsReportedAsUnauthorized(t *testing.T) {
 	}
 }
 
-func TestCreatePostPublishesAsTheMemberAndReturnsThePostID(t *testing.T) {
+func TestPublishPublishesAsTheMemberAndReturnsThePostID(t *testing.T) {
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/rest/posts" {
@@ -66,7 +66,7 @@ func TestCreatePostPublishesAsTheMemberAndReturnsThePostID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	id, err := New(server.URL, "202510").CreatePost(context.Background(), "member-token", "abc123", "Hello LinkedIn", VisibilityPublic)
+	id, err := New(server.URL, "202510").Publish(context.Background(), "member-token", Post{Author: PersonURN("abc123"), Text: "Hello LinkedIn", Visibility: VisibilityPublic})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,8 +78,8 @@ func TestCreatePostPublishesAsTheMemberAndReturnsThePostID(t *testing.T) {
 	}
 }
 
-func TestCreatePostRejectsAnUnknownVisibility(t *testing.T) {
-	if _, err := New("http://127.0.0.1:1", "202510").CreatePost(context.Background(), "t", "abc", "x", Visibility("EVERYONE")); err == nil {
+func TestPublishRejectsAnUnknownVisibility(t *testing.T) {
+	if _, err := New("http://127.0.0.1:1", "202510").Publish(context.Background(), "t", Post{Author: PersonURN("abc"), Text: "x", Visibility: Visibility("EVERYONE")}); err == nil {
 		t.Fatal("an unknown visibility was accepted")
 	}
 }
@@ -102,14 +102,14 @@ func postError(t *testing.T, status int, body string) error {
 		_, _ = w.Write([]byte(body))
 	}))
 	defer server.Close()
-	_, err := New(server.URL, "202610").CreatePost(context.Background(), "tok-secret", "abc", "private post text", VisibilityPublic)
+	_, err := New(server.URL, "202610").Publish(context.Background(), "tok-secret", Post{Author: PersonURN("abc"), Text: "private post text", Visibility: VisibilityPublic})
 	if err == nil {
 		t.Fatal("expected an error")
 	}
 	return err
 }
 
-func TestCreatePostErrorCarriesLinkedInsStatusAndErrorFields(t *testing.T) {
+func TestPublishErrorCarriesLinkedInsStatusAndErrorFields(t *testing.T) {
 	err := postError(t, http.StatusUnprocessableEntity,
 		`{"status":422,"code":"INVALID_FIELD","serviceErrorCode":65600,"message":"bad field","echo":"private post text tok-secret"}`)
 	var apiErr *APIError
@@ -128,14 +128,14 @@ func TestCreatePostErrorCarriesLinkedInsStatusAndErrorFields(t *testing.T) {
 	}
 }
 
-func TestCreatePostErrorTruncatesLinkedInsMessage(t *testing.T) {
+func TestPublishErrorTruncatesLinkedInsMessage(t *testing.T) {
 	err := postError(t, http.StatusBadRequest, `{"message":"`+strings.Repeat("x", 1000)+`"}`)
 	if len(err.Error()) > 400 {
 		t.Fatalf("error is %d bytes", len(err.Error()))
 	}
 }
 
-func TestCreatePostErrorToleratesANonJSONBody(t *testing.T) {
+func TestPublishErrorToleratesANonJSONBody(t *testing.T) {
 	err := postError(t, http.StatusBadGateway, "<html>oops</html>")
 	if !strings.Contains(err.Error(), "502") || strings.Contains(err.Error(), "oops") {
 		t.Fatalf("err = %v", err)
